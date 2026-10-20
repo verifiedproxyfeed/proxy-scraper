@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "updated": "2026-10-20",
+  "rule": "A row is published only if at least one source with publish=true lists it. Licences were read from each repository's LICENSE file. A source whose licence asks for attribution has a credit, and a credit_url when it asks for a link. We never fetch from a vendor the project excludes, or a list that names such a vendor as a direct input; a permissively licensed aggregator counts as its own source. The CLI's scrape reads only the publish=true sources.",
+  "sources": [
+    {"id": "monosans-http", "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt", "protocol": "http", "repo": "https://github.com/monosans/proxy-list", "licence": "MIT", "publish": true},
+    {"id": "monosans-socks5", "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt", "protocol": "socks5", "repo": "https://github.com/monosans/proxy-list", "licence": "MIT", "publish": true},
+    {"id": "zaeem20-socks5", "url": "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/socks5.txt", "protocol": "socks5", "repo": "https://github.com/Zaeem20/FREE_PROXIES_LIST", "licence": "MIT", "publish": true},
+    {"id": "hproxy-http", "url": "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/http.txt", "protocol": "http", "repo": "https://github.com/hproxy-com/free-proxy-list", "licence": "MIT", "publish": true},
+    {"id": "hproxy-socks5", "url": "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/socks5.txt", "protocol": "socks5", "repo": "https://github.com/hproxy-com/free-proxy-list", "licence": "MIT", "publish": true},
+    {"id": "proxio-socks5", "url": "https://raw.githubusercontent.com/proxio-io/proxy-list/main/socks5.txt", "protocol": "socks5", "repo": "https://github.com/proxio-io/proxy-list", "licence": "CC-BY-4.0", "publish": true, "credit": "proxio.io (CC BY 4.0)", "credit_url": "https://proxio.io"},
+    {"id": "proxmint-http", "url": "https://raw.githubusercontent.com/proxmint/free-proxy-list/main/proxies/http.txt", "protocol": "http", "repo": "https://github.com/proxmint/free-proxy-list", "licence": "CC-BY-4.0", "publish": true, "credit": "proxmint/free-proxy-list (CC BY 4.0)"},
+    {"id": "proxmint-socks5", "url": "https://raw.githubusercontent.com/proxmint/free-proxy-list/main/proxies/socks5.txt", "protocol": "socks5", "repo": "https://github.com/proxmint/free-proxy-list", "licence": "CC-BY-4.0", "publish": true, "credit": "proxmint/free-proxy-list (CC BY 4.0)"},
+    {"id": "databay-http", "url": "https://raw.githubusercontent.com/databay-labs/free-proxy-list/master/http.txt", "protocol": "http", "repo": "https://github.com/databay-labs/free-proxy-list", "licence": "MIT", "publish": true},
+    {"id": "iplocate-socks5", "url": "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/socks5.txt", "protocol": "socks5", "repo": "https://github.com/iplocate/free-proxy-list", "licence": "MIT", "publish": true},
+    {"id": "xyzs996-https", "url": "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/https.txt", "protocol": "https", "repo": "https://github.com/xyzs996/free-proxy-health-list", "licence": "MIT", "publish": true},
+    {"id": "proxifly-http", "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt", "protocol": "http", "repo": "https://github.com/proxifly/free-proxy-list", "licence": "GPL-3.0", "publish": false},
+    {"id": "thespeedx-http", "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt", "protocol": "http", "repo": "https://github.com/TheSpeedX/PROXY-List", "licence": "none", "publish": false},
+    {"id": "thespeedx-socks5", "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt", "protocol": "socks5", "repo": "https://github.com/TheSpeedX/PROXY-List", "licence": "none", "publish": false},
+    {"id": "hideipme-http", "url": "https://raw.githubusercontent.com/zloi-user/hideip.me/main/http.txt", "protocol": "http", "repo": "https://github.com/zloi-user/hideip.me", "licence": "none", "publish": false},
+    {"id": "hideipme-socks5", "url": "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks5.txt", "protocol": "socks5", "repo": "https://github.com/zloi-user/hideip.me", "licence": "none", "publish": false},
+    {"id": "mmpx12-http", "url": "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt", "protocol": "http", "repo": "https://github.com/mmpx12/proxy-list", "licence": "none", "publish": false}
+  ]
+}
