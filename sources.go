@@ -72,6 +72,15 @@ func scrape(ctx context.Context, client *http.Client, sources []source, protocol
 	return all, nil
 }
 
+// statusError is an answer other than 200. Its text is v0.1.0's ("HTTP 404"); fetch -key reads the
+// status and Retry-After to explain a keyed refusal.
+type statusError struct {
+	code   int
+	header http.Header
+}
+
+func (e *statusError) Error() string { return fmt.Sprintf("HTTP %d", e.code) }
+
 func get(ctx context.Context, client *http.Client, url string, limit int64) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -86,7 +95,7 @@ func get(ctx context.Context, client *http.Client, url string, limit int64) ([]b
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, &statusError{code: resp.StatusCode, header: resp.Header}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {

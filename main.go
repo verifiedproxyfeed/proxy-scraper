@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -28,15 +29,26 @@ var (
 	defaultBase = "https://api.proxyscraper.com"
 )
 
+// The optional key (https://proxyscraper.com/api#key). Only fetch uses one: check's judge requests go
+// through the proxies under test, and scrape reads third-party lists.
+const (
+	keyEnv      = "PROXY_SCRAPER_KEY"
+	accountPage = "https://proxyscraper.com/account"
+	// maskedKey stands for the key in anything printed, as in the server's own logs (/k/psk_masked/…).
+	maskedKey = "psk_masked"
+)
+
 const usage = `proxy-scraper — free proxies you can trust a little more
 
 Usage:
-  proxy-scraper fetch  [-protocol socks5|http] [-max-latency 500|1000|1500|5000] [-format ipport|uri|json] [-stable]
+  proxy-scraper fetch  [-protocol socks5|http] [-max-latency 500|1000|1500|5000] [-format ipport|uri|json] [-stable] [-key psk_…]
   proxy-scraper scrape [-protocol socks5|http|all]
   proxy-scraper check  [-protocol socks5|http] [-judge URL] [-timeout 10s] [-concurrency 50] [-format ipport|uri|json] [file]
   proxy-scraper version
 
 fetch   prints the verified list (every row passed a check within 15 minutes before its snapshot).
+        With a key (-key or $PROXY_SCRAPER_KEY, free at https://proxyscraper.com/account) it reads
+        the keyed URLs: higher rate limits, the same rows.
 scrape  downloads the public source lists and prints unique ip:port, unchecked.
 check   tests proxies from stdin or a file through an HTTPS judge with certificate verification
         and prints the working ones, fastest first. Internal addresses are refused.
@@ -119,6 +131,8 @@ func cmdFetch(ctx context.Context, args []string, stdout io.Writer) error {
 	format := fs.String("format", "ipport", "ipport, uri or json")
 	stable := fs.Bool("stable", false, "only proxies up ≥90% of the last 7 days")
 	base := fs.String("base", defaultBase, "data host base URL")
+	// No default value here: -h prints defaults, and the key is never printed.
+	keyFlag := fs.String("key", "", "key from "+accountPage+" (default $"+keyEnv+"; none: the free URLs)")
 	if err := fs.Parse(args); err != nil {
 		return usageError{err.Error()}
 	}
@@ -136,35 +150,101 @@ func cmdFetch(ctx context.Context, args []string, stdout io.Writer) error {
 			return usageError{"-stable lists have no latency filter"}
 		}
 	}
+	key, err := fetchKey(fs, *keyFlag)
+	if err != nil {
+		return err
+	}
 	if *base == "" {
 		return usageError{"no data host configured in this build; pass -base https://<data-host>"}
 	}
-	target, err := feedURL(*base, *protocol, *maxLatency, *format, *stable)
+	target, err := feedURL(*base, key, *protocol, *maxLatency, *format, *stable)
 	if err != nil {
 		return err
 	}
 	body, err := get(ctx, http.DefaultClient, target, 16<<20)
 	if err != nil {
+		if key != "" {
+			return keyedError(target, key, err)
+		}
 		return fmt.Errorf("fetch %s: %w", target, err)
 	}
 	_, err = stdout.Write(body)
 	return err
 }
 
-// feedURL builds a URL of the published /v1 contract.
-func feedURL(base, protocol, maxLatency, format string, stable bool) (string, error) {
+// fetchKey returns fetch's key, or "" for the free URLs: -key when given (an empty -key runs without one),
+// else $PROXY_SCRAPER_KEY. Surrounding spaces are dropped. A value that is not the server's format (psk_
+// and 32 of [a-z0-9]) is a usage error before any request, and the error never quotes it.
+func fetchKey(fs *flag.FlagSet, flagValue string) (string, error) {
+	key, from := os.Getenv(keyEnv), keyEnv
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "key" {
+			key, from = flagValue, "-key"
+		}
+	})
+	key = strings.TrimSpace(key)
+	if key == "" || isKey(key) {
+		return key, nil
+	}
+	return "", usageError{fmt.Sprintf("%s is not a key (%d characters, not shown): a key is psk_ and 32 lower-case letters or digits, from %s", from, len([]rune(key)), accountPage)}
+}
+
+func isKey(s string) bool {
+	return len(s) == 36 && strings.HasPrefix(s, "psk_") && strings.Trim(s[4:], "abcdefghijklmnopqrstuvwxyz0123456789") == ""
+}
+
+// keyedError is a keyed fetch's error: the server's two keyed refusals (404, 429) explained, and the key
+// masked everywhere in it, the URL quoted by Go's own errors included.
+func keyedError(target, key string, err error) error {
+	var s *statusError
+	if errors.As(err, &s) {
+		switch s.code {
+		case http.StatusNotFound:
+			err = fmt.Errorf("%w: the key is unknown or revoked; a new one: %s", err, accountPage)
+		case http.StatusTooManyRequests:
+			err = fmt.Errorf("%w: %s (caps: %s)", err, keyLimit(s.header.Get("Retry-After")), accountPage)
+		}
+	}
+	return errors.New(strings.ReplaceAll(fmt.Sprintf("fetch %s: %v", target, err), key, maskedKey))
+}
+
+// keyLimit names the limit a keyed 429 hit by its Retry-After: the server sends 60 for the key's
+// per-minute cap and 3600 for its daily one; its per-second flood guard sends none.
+func keyLimit(retryAfter string) string {
+	secs, err := strconv.Atoi(retryAfter)
+	switch {
+	case err != nil || secs < 0:
+		return "over the burst limit for keyed requests; retry in a few seconds"
+	case secs <= 60:
+		return fmt.Sprintf("the key is over its per-minute cap; retry after %d s", secs)
+	default:
+		return fmt.Sprintf("the key is over its daily cap; retry after %d s", secs)
+	}
+}
+
+// feedURL builds a URL of the published /v1 contract; with a key, the same path and query under
+// /k/{key}.
+func feedURL(base, key, protocol, maxLatency, format string, stable bool) (string, error) {
 	u, err := url.Parse(strings.TrimRight(base, "/"))
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 		return "", usageError{fmt.Sprintf("-base must be an http(s) URL, got %q", base)}
+	}
+	// The key is in the path, so it crosses a network only inside TLS.
+	if key != "" && u.Scheme != "https" && !isLoopback(u.Hostname()) {
+		return "", usageError{"a key goes only to an https -base (or one on this machine): it travels in the URL"}
+	}
+	root := "/v1/"
+	if key != "" {
+		root = "/k/" + key + "/v1/"
 	}
 	ext := "txt"
 	if format == "json" {
 		ext = "json"
 	}
 	if stable {
-		u.Path += "/v1/" + protocol + "/stable." + ext
+		u.Path += root + protocol + "/stable." + ext
 	} else {
-		u.Path += "/v1/" + protocol + "." + ext
+		u.Path += root + protocol + "." + ext
 	}
 	q := url.Values{}
 	if maxLatency != "" {
@@ -175,6 +255,11 @@ func feedURL(base, protocol, maxLatency, format string, stable bool) (string, er
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+func isLoopback(host string) bool {
+	ip, err := netip.ParseAddr(host)
+	return host == "localhost" || (err == nil && ip.IsLoopback())
 }
 
 func cmdScrape(ctx context.Context, args []string, stdout, stderr io.Writer) error {

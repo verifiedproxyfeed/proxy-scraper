@@ -286,20 +286,33 @@ func TestCheckCountsAJudge429OverTLSAsWorking(t *testing.T) {
 // --- commands -----------------------------------------------------------------
 
 func TestFeedURLFollowsTheContract(t *testing.T) {
-	cases := map[string][5]string{
-		"https://d.example/v1/socks5.txt":                           {"https://d.example", "socks5", "", "ipport", ""},
-		"https://d.example/v1/http.txt?format=uri&max_latency=1000": {"https://d.example/", "http", "1000", "uri", ""},
-		"https://d.example/v1/http.json?max_latency=500":            {"https://d.example", "http", "500", "json", ""},
-		"https://d.example/v1/socks5/stable.txt":                    {"https://d.example", "socks5", "", "ipport", "stable"},
+	cases := map[string][6]string{
+		"https://d.example/v1/socks5.txt":                           {"https://d.example", "", "socks5", "", "ipport", ""},
+		"https://d.example/v1/http.txt?format=uri&max_latency=1000": {"https://d.example/", "", "http", "1000", "uri", ""},
+		"https://d.example/v1/http.json?max_latency=500":            {"https://d.example", "", "http", "500", "json", ""},
+		"https://d.example/v1/socks5/stable.txt":                    {"https://d.example", "", "socks5", "", "ipport", "stable"},
+		// With a key: the same path and query under /k/{key}.
+		"https://d.example/k/" + testKey + "/v1/http.txt?format=uri&max_latency=1000": {"https://d.example/", testKey, "http", "1000", "uri", ""},
+		"https://d.example/k/" + testKey + "/v1/socks5/stable.json":                   {"https://d.example", testKey, "socks5", "", "json", "stable"},
+		"https://d.example/feed/k/" + testKey + "/v1/socks5.txt":                      {"https://d.example/feed", testKey, "socks5", "", "ipport", ""},
+		"http://127.0.0.1:8080/k/" + testKey + "/v1/socks5.txt":                       {"http://127.0.0.1:8080", testKey, "socks5", "", "ipport", ""},
+		"http://[::1]:8080/k/" + testKey + "/v1/socks5.txt":                           {"http://[::1]:8080", testKey, "socks5", "", "ipport", ""},
+		"http://localhost/k/" + testKey + "/v1/socks5.txt":                            {"http://localhost", testKey, "socks5", "", "ipport", ""},
 	}
 	for want, c := range cases {
-		got, err := feedURL(c[0], c[1], c[2], c[3], c[4] == "stable")
+		got, err := feedURL(c[0], c[1], c[2], c[3], c[4], c[5] == "stable")
 		if err != nil || got != want {
 			t.Errorf("got %q (%v), want %q", got, err, want)
 		}
 	}
-	if _, err := feedURL("ftp://x", "socks5", "", "ipport", false); err == nil {
+	if _, err := feedURL("ftp://x", "", "socks5", "", "ipport", false); err == nil {
 		t.Error("non-http base must be rejected")
+	}
+	// The key is in the path: over plain http it would cross the network readable.
+	for _, base := range []string{"http://d.example", "http://192.0.2.1:8080", "http://localhost.d.example"} {
+		if _, err := feedURL(base, testKey, "socks5", "", "ipport", false); err == nil {
+			t.Errorf("a key must not go to %s", base)
+		}
 	}
 }
 
@@ -361,6 +374,197 @@ func TestFetchWithoutFlagsUsesTheBuiltInDataHost(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run(context.Background(), []string{"fetch"}, nil, &out, &errOut); code != 0 || out.String() != "192.0.2.11:1080\n" {
 		t.Fatalf("code %d out %q err %q", code, out.String(), errOut.String())
+	}
+}
+
+// --- key ----------------------------------------------------------------------
+
+// testKey has the server's key format (psk_ and 32 of [a-z0-9]); built, so no file holds a key-shaped literal.
+var testKey = "psk_" + strings.Repeat("k3", 16)
+
+// recordingFeed is a data host that answers every request with status, header and body, and records it.
+func recordingFeed(t *testing.T, status int, header http.Header, body string) (base string, requests func() []*http.Request) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen []*http.Request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Clone(context.Background()))
+		mu.Unlock()
+		for name, values := range header {
+			w.Header()[name] = values
+		}
+		w.WriteHeader(status)
+		io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, func() []*http.Request {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]*http.Request(nil), seen...)
+	}
+}
+
+func TestFetchWithAKeyAsksTheKeyedURL(t *testing.T) {
+	base, requests := recordingFeed(t, http.StatusOK, nil, "192.0.2.12:1080\n")
+	other := "psk_" + strings.Repeat("z9", 16)
+	keyed := "/k/" + testKey + "/v1/http.txt?max_latency=1000"
+	free := "/v1/http.txt?max_latency=1000"
+	cases := []struct {
+		name, env string
+		flags     []string
+		want      string
+	}{
+		{"flag", "", []string{"-key", testKey}, keyed},
+		{"environment", testKey, nil, keyed},
+		{"flag over environment", other, []string{"-key", testKey}, keyed},
+		{"spaces around the key", " " + testKey + "\n", nil, keyed},
+		{"empty flag over environment", testKey, []string{"-key", ""}, free},
+		{"empty environment", "", nil, free},
+	}
+	for _, c := range cases {
+		t.Setenv(keyEnv, c.env)
+		var out, errOut bytes.Buffer
+		args := append([]string{"fetch", "-base", base, "-protocol", "http", "-max-latency", "1000"}, c.flags...)
+		code := run(context.Background(), args, nil, &out, &errOut)
+		seen := requests()
+		if code != 0 || out.String() != "192.0.2.12:1080\n" || errOut.Len() != 0 {
+			t.Fatalf("%s: code %d out %q err %q", c.name, code, out.String(), errOut.String())
+		}
+		last := seen[len(seen)-1]
+		if last.RequestURI != c.want || last.Header.Get("User-Agent") != "proxy-scraper-cli/"+version {
+			t.Errorf("%s: asked %s with User-Agent %q, want %s", c.name, last.RequestURI, last.Header.Get("User-Agent"), c.want)
+		}
+	}
+}
+
+// Without a key, fetch asks exactly what v0.1.0 asked and reports a refusal in v0.1.0's words.
+func TestFetchWithoutAKeyIsUnchanged(t *testing.T) {
+	t.Setenv(keyEnv, "")
+	base, requests := recordingFeed(t, http.StatusOK, nil, "192.0.2.13:1080\n")
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"fetch", "-base", base}, nil, &out, &errOut); code != 0 {
+		t.Fatalf("code %d err %q", code, errOut.String())
+	}
+	r := requests()[0]
+	var names []string
+	for name := range r.Header {
+		names = append(names, name)
+	}
+	if r.Method != http.MethodGet || r.RequestURI != "/v1/socks5.txt" || len(names) != 2 ||
+		r.Header.Get("User-Agent") != "proxy-scraper-cli/"+version || r.Header.Get("Accept-Encoding") != "gzip" {
+		t.Fatalf("%s %s with headers %v", r.Method, r.RequestURI, r.Header)
+	}
+	for _, status := range []int{http.StatusNotFound, http.StatusTooManyRequests} {
+		refusing, _ := recordingFeed(t, status, http.Header{"Retry-After": {"60"}}, "no")
+		out.Reset()
+		errOut.Reset()
+		code := run(context.Background(), []string{"fetch", "-base", refusing}, nil, &out, &errOut)
+		if want := "error: fetch " + refusing + "/v1/socks5.txt: HTTP " + strconv.Itoa(status) + "\n"; code != 1 || errOut.String() != want {
+			t.Errorf("code %d err %q, want %q", code, errOut.String(), want)
+		}
+	}
+}
+
+func TestFetchRefusesAMalformedKeyBeforeAnyRequest(t *testing.T) {
+	base, requests := recordingFeed(t, http.StatusOK, nil, "")
+	bad := []string{
+		"psk_SHORTK3",
+		strings.ToUpper(testKey),
+		"pk_" + testKey[4:],
+		testKey + "q",
+		testKey[:20] + " " + testKey[21:],
+		testKey[:35] + "-",
+	}
+	for _, value := range bad {
+		for _, viaFlag := range []bool{false, true} {
+			args := []string{"fetch", "-base", base}
+			from := keyEnv
+			t.Setenv(keyEnv, value)
+			if viaFlag {
+				t.Setenv(keyEnv, "")
+				args = append(args, "-key", value)
+				from = "-key"
+			}
+			var out, errOut bytes.Buffer
+			code := run(context.Background(), args, nil, &out, &errOut)
+			msg := errOut.String()
+			if code != 2 || !strings.HasPrefix(msg, from+" is not a key") || !strings.Contains(msg, accountPage) {
+				t.Errorf("%s %q: code %d err %q", from, value, code, msg)
+			}
+			if strings.Contains(msg, value) || strings.Contains(strings.ToLower(msg), "k3k3k3") {
+				t.Errorf("%s: the error shows the value: %q", from, msg)
+			}
+		}
+	}
+	if n := len(requests()); n != 0 {
+		t.Fatalf("a malformed key must not be sent; %d requests", n)
+	}
+}
+
+// The server's keyed refusals are explained, and no error shows the key: the URL is masked the way the
+// server's own logs mask it.
+func TestFetchKeyErrorsExplainAndNeverShowTheKey(t *testing.T) {
+	t.Setenv(keyEnv, testKey)
+	cases := []struct {
+		status     int
+		retryAfter string
+		want       string
+	}{
+		{http.StatusNotFound, "", "HTTP 404: the key is unknown or revoked; a new one: " + accountPage},
+		{http.StatusTooManyRequests, "60", "HTTP 429: the key is over its per-minute cap; retry after 60 s (caps: " + accountPage + ")"},
+		{http.StatusTooManyRequests, "3600", "HTTP 429: the key is over its daily cap; retry after 3600 s (caps: " + accountPage + ")"},
+		{http.StatusTooManyRequests, "", "HTTP 429: over the burst limit for keyed requests; retry in a few seconds"},
+		{http.StatusServiceUnavailable, "600", "HTTP 503\n"},
+	}
+	for _, c := range cases {
+		header := http.Header{}
+		if c.retryAfter != "" {
+			header.Set("Retry-After", c.retryAfter)
+		}
+		base, _ := recordingFeed(t, c.status, header, "Unknown key. Keys: "+accountPage)
+		var out, errOut bytes.Buffer
+		code := run(context.Background(), []string{"fetch", "-base", base}, nil, &out, &errOut)
+		msg := errOut.String()
+		if code != 1 || !strings.HasPrefix(msg, "error: fetch "+base+"/k/"+maskedKey+"/v1/socks5.txt: ") || !strings.Contains(msg, c.want) {
+			t.Errorf("HTTP %d: code %d err %q, want %q", c.status, code, msg, c.want)
+		}
+		if strings.Contains(msg, testKey[4:]) {
+			t.Errorf("HTTP %d: the error shows the key: %q", c.status, msg)
+		}
+	}
+
+	// Go's own transport error quotes the URL it asked.
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"fetch", "-base", "http://" + deadAddr(t)}, nil, &out, &errOut); code != 1 ||
+		!strings.Contains(errOut.String(), "/k/"+maskedKey+"/v1/") || strings.Contains(errOut.String(), testKey[4:]) {
+		t.Errorf("connection refused: code %d err %q", code, errOut.String())
+	}
+	errOut.Reset()
+	if code := run(context.Background(), []string{"fetch", "-base", "http://192.0.2.1"}, nil, &out, &errOut); code != 2 ||
+		!strings.Contains(errOut.String(), "https") || strings.Contains(errOut.String(), testKey[4:]) {
+		t.Errorf("plain-http base: code %d err %q", code, errOut.String())
+	}
+}
+
+// check's judge requests go through the proxies under test, so they never carry the key, even when the
+// judge is the data host's /v1/ip.
+func TestCheckNeverSendsTheKey(t *testing.T) {
+	t.Setenv(keyEnv, testKey)
+	judgeURL, requests := recordingFeed(t, http.StatusOK, nil, "203.0.113.9\n")
+	saved := defaultBase
+	defaultBase = judgeURL
+	defer func() { defaultBase = saved }()
+	socks, _ := startSOCKS5(t)
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"check", "-allow-private"}, strings.NewReader(socks+"\n"), &out, &errOut); code != 0 || strings.TrimSpace(out.String()) != socks {
+		t.Fatalf("check exit %d: out %q err %q", code, out.String(), errOut.String())
+	}
+	if seen := requests(); len(seen) != 1 || seen[0].RequestURI != "/v1/ip" {
+		t.Fatalf("want one judge request for /v1/ip, got %d (%v)", len(seen), seen)
+	}
+	if code := run(context.Background(), []string{"check", "-key", testKey}, strings.NewReader(""), &out, &errOut); code != 2 {
+		t.Errorf("check takes no -key: exit %d", code)
 	}
 }
 

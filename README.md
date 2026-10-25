@@ -28,7 +28,7 @@ Or build it with Go 1.24 or later:
 
 - **`fetch`**: the feed's own rule. Every row passed our check within 15 minutes before its snapshot. Flags:
   `-protocol socks5|http`, `-max-latency 500|1000|1500|5000`, `-format ipport|uri|json`, `-stable` (up ≥90% of
-  the last 7 days), `-base` (another data host).
+  the last 7 days), `-base` (another data host), `-key` (below).
 - **`scrape`**: downloads each list in the built-in source register (`sources.json`) marked `"publish": true`
   (its licence lets the feed publish from it), de-duplicates, and prints `ip:port`. The register also records
   the lists the feed does not publish from (`"publish": false`); `scrape` never downloads those. A source that
@@ -41,6 +41,30 @@ Or build it with Go 1.24 or later:
     many. With an `http://` judge, a 429 counts as a failure.
   - Flags: `-judge URL` (default: `https://api.proxyscraper.com/v1/ip`), `-timeout 10s`, `-concurrency 50`
     (max 500), `-format`.
+
+## Key (optional)
+
+`fetch` needs no key. The free URLs allow 10 requests in 10 seconds per address; a free key from
+https://proxyscraper.com/account lifts that to 1,000 a minute and 100,000 a day. With a key, `fetch` asks
+`https://api.proxyscraper.com/k/{key}/v1/…` instead of `/v1/…`, same paths and parameters, and gets the same
+rows: a key never gets fresher, more or other ones.
+
+```sh
+export PROXY_SCRAPER_KEY=psk_…      # or, for one run: proxy-scraper fetch -key psk_…
+proxy-scraper fetch -protocol socks5
+```
+
+- `-key` wins over `PROXY_SCRAPER_KEY`, and `-key ''` runs without one. Prefer the variable: a flag shows up in
+  `ps` and in your shell history.
+- Anything that is not `psk_` and 32 lower-case letters or digits is refused before a request is made. A key
+  goes only to an `https` data host (or one on your own machine), since it travels in the URL.
+- The key is never printed. Errors show its URL as `/k/psk_masked/v1/…`, as the server's own logs do.
+- HTTP 404 means the key is unknown or revoked: make a new one on the account page. HTTP 429 means it is over a
+  cap; the error says which one and when to retry (`Retry-After`).
+- `check` never sends the key (its judge requests go through the proxies it tests), and neither does `scrape`.
+- A key also opens a few documents the CLI does not fetch: every country in one file, per-proxy history and
+  about the last two hours of snapshots, under the same `/k/{key}/v1/` root; https://proxyscraper.com/api#key
+  lists them.
 
 ## Safety
 
