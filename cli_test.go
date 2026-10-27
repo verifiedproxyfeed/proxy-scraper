@@ -460,7 +460,12 @@ func TestFetchWithoutAKeyIsUnchanged(t *testing.T) {
 		out.Reset()
 		errOut.Reset()
 		code := run(context.Background(), []string{"fetch", "-base", refusing}, nil, &out, &errOut)
-		if want := "error: fetch " + refusing + "/v1/socks5.txt: HTTP " + strconv.Itoa(status) + "\n"; code != 1 || errOut.String() != want {
+		want := "error: fetch " + refusing + "/v1/socks5.txt: HTTP " + strconv.Itoa(status) + "\n"
+		if status == http.StatusTooManyRequests {
+			// v0.2.1: a keyless 429 names the free limit and the account page; every other message is v0.1.0's.
+			want = "error: fetch " + refusing + "/v1/socks5.txt: HTTP 429 (10 requests in 10 seconds per address; more with a free key: " + accountPage + ")\n"
+		}
+		if code != 1 || errOut.String() != want {
 			t.Errorf("code %d err %q, want %q", code, errOut.String(), want)
 		}
 	}

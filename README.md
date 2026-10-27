@@ -61,6 +61,8 @@ proxy-scraper fetch -protocol socks5
 - The key is never printed. Errors show its URL as `/k/psk_masked/v1/…`, as the server's own logs do.
 - HTTP 404 means the key is unknown or revoked: make a new one on the account page. HTTP 429 means it is over a
   cap; the error says which one and when to retry (`Retry-After`).
+- Without a key, `fetch`'s HTTP 429 names the free limit (10 requests in 10 seconds per address) and the account
+  page.
 - `check` never sends the key (its judge requests go through the proxies it tests), and neither does `scrape`.
 - A key also opens a few documents the CLI does not fetch: every country in one file, per-proxy history and
   about the last two hours of snapshots, under the same `/k/{key}/v1/` root; https://proxyscraper.com/api#key

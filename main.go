@@ -166,6 +166,11 @@ func cmdFetch(ctx context.Context, args []string, stdout io.Writer) error {
 		if key != "" {
 			return keyedError(target, key, err)
 		}
+		// A keyless 429 is the moment a script needs a key: name the free limit and where a key comes from.
+		var s *statusError
+		if errors.As(err, &s) && s.code == http.StatusTooManyRequests {
+			err = fmt.Errorf("%w (10 requests in 10 seconds per address; more with a free key: %s)", err, accountPage)
+		}
 		return fmt.Errorf("fetch %s: %w", target, err)
 	}
 	_, err = stdout.Write(body)
